@@ -1,0 +1,23 @@
+# Secrets
+.env
+credentials.json
+service-account.json
+*.key
+
+# Python
+__pycache__/
+*.pyc
+.venv/
+venv/
+
+# OS
+.DS_Store
+Thumbs.db
+
+# IDE
+.vscode/
+.idea/
+
+# Data (too large for git, rebuild from scrapers)
+data/*.db
+data/*.csv

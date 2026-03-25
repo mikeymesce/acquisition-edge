@@ -1,0 +1,26 @@
+{
+  "industries": ["plumbing", "electrical"],
+  "states": ["NJ", "NY", "CT"],
+  "employees": {
+    "min": 4,
+    "max": 40
+  },
+  "sde": {
+    "min": 100000,
+    "max": 1000000
+  },
+  "nj_license_types": {
+    "plumbing": ["Master Plumber", "Journeyman Plumber"],
+    "electrical": ["Electrical Contractor", "Journeyman Electrician"]
+  },
+  "distress_weights": {
+    "license_expired": 25,
+    "license_expiring_90_days": 15,
+    "disciplinary_action": 20,
+    "probate_filing": 25,
+    "divorce_filing": 20,
+    "declining_reviews": 15,
+    "no_website": 5,
+    "delinquent_sos_filing": 10
+  }
+}
