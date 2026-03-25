@@ -18,6 +18,6 @@ Thumbs.db
 .vscode/
 .idea/
 
-# Data (too large for git, rebuild from scrapers)
-data/*.db
-data/*.csv
+# Keep data and results in git for cloud persistence
+# data/*.db
+# data/*.csv

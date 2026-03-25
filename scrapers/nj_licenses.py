@@ -36,18 +36,8 @@ LICENSE_SEARCHES = [
         "industry": "Plumbing",
     },
     {
-        "profession": "Master Plumbers",
-        "license_type": "Journeyman Plumber",
-        "industry": "Plumbing",
-    },
-    {
         "profession": "Electrical Contractors",
         "license_type": "Electrical Contractor",
-        "industry": "Electrical",
-    },
-    {
-        "profession": "Electrical Contractors",
-        "license_type": "Class A Journeyman Electrician",
         "industry": "Electrical",
     },
 ]
@@ -185,9 +175,10 @@ def _search_and_parse(page, search):
                 print(f"  Hit page limit (500)")
                 break
 
-            _polite_delay(0.5, 1.5)
+            _polite_delay(1, 2)
             next_link.click()
-            page.wait_for_timeout(3000)
+            # Wait for page to fully load — this was causing the pagination bug
+            page.wait_for_timeout(5000)
 
             page_results = _parse_datagrid(page, search)
             if not page_results:
