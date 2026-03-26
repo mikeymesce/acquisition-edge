@@ -57,7 +57,11 @@ jobs:
           if [ "$REMAINING" -gt 0 ]; then
             echo "Waiting 30 minutes then re-triggering..."
             sleep 1800
-            gh workflow run "Run Acquisition Edge" --repo mikeymesce/acquisition-edge
+            curl -X POST \
+              -H "Accept: application/vnd.github.v3+json" \
+              -H "Authorization: token $GH_TOKEN" \
+              https://api.github.com/repos/mikeymesce/acquisition-edge/actions/workflows/run.yml/dispatches \
+              -d '{"ref":"main"}'
             echo "Re-triggered!"
           else
             echo "All done! No re-trigger needed."
