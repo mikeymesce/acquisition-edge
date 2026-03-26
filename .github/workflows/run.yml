@@ -1,6 +1,8 @@
 name: Run Acquisition Edge
 
 on:
+  schedule:
+    - cron: '0 10 * * *'  # 6am ET daily
   workflow_dispatch:
 
 permissions:
