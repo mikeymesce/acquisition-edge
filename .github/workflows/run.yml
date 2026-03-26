@@ -30,6 +30,9 @@ jobs:
       - name: Run license scrape
         run: python main.py --nj-only
 
+      - name: Run enrichment on deceased + retired
+        run: python enrich_priority.py
+
       - name: Commit updated data
         run: |
           git config user.name "github-actions[bot]"
