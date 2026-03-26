@@ -55,8 +55,8 @@ jobs:
           ")
           echo "Remaining to enrich: $REMAINING"
           if [ "$REMAINING" -gt 0 ]; then
-            echo "Waiting 10 minutes then re-triggering..."
-            sleep 600
+            echo "Waiting 30 minutes then re-triggering..."
+            sleep 1800
             gh workflow run "Run Acquisition Edge" --repo mikeymesce/acquisition-edge
             echo "Re-triggered!"
           else
