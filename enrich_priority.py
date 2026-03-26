@@ -553,6 +553,11 @@ def run_pass2(page, contractors, conn):
         license_type = c.get("license_type") or ""
         industry_kw = "plumbing" if "plumb" in license_type.lower() else "electrical"
 
+        # Skip already enriched
+        if c.get("deep_checked") or c.get("obituary_found"):
+            print(f"\n[{i}/{len(contractors)}] {name} — already enriched, skipping")
+            continue
+
         print(f"\n[{i}/{len(contractors)}] {name} — {city}, NJ")
 
         # ── Search 1: Obituary ──
@@ -575,7 +580,7 @@ def run_pass2(page, contractors, conn):
             if obit_data["family_contacts"]:
                 print(f"    Family: {', '.join(obit_data['family_contacts'])}")
 
-        time.sleep(random.uniform(3, 5))
+        time.sleep(random.uniform(12, 18))
 
         # ── Search 2: Business info ──
         name_part = f'"{name}"'
@@ -603,7 +608,7 @@ def run_pass2(page, contractors, conn):
         if biz_data["business_type"]:
             print(f"    Type: {biz_data['business_type']}")
 
-        time.sleep(random.uniform(3, 5))
+        time.sleep(random.uniform(12, 18))
 
         # ── Search 3: Contact/LinkedIn ──
         query3 = f'"{name}" {city} NJ linkedin OR phone OR contact'
@@ -628,7 +633,7 @@ def run_pass2(page, contractors, conn):
         # ── Cross-check & save ──
         _save_progress(conn, c, obit_data, biz_data, contact_data)
 
-        time.sleep(random.uniform(3, 5))
+        time.sleep(random.uniform(12, 18))
 
     if captcha_hit:
         print("\n*** Google CAPTCHA stopped further searches. Progress saved. ***")
