@@ -27,10 +27,7 @@ jobs:
           python -m playwright install chromium
           python -m playwright install-deps chromium
 
-      - name: Run license scrape
-        run: python main.py --nj-only
-
-      - name: Run enrichment on deceased + retired
+      - name: Run enrichment only (skip license scrape)
         run: python enrich_priority.py
 
       - name: Commit updated data
@@ -58,8 +55,8 @@ jobs:
           ")
           echo "Remaining to enrich: $REMAINING"
           if [ "$REMAINING" -gt 0 ]; then
-            echo "Waiting 30 minutes then re-triggering..."
-            sleep 1800
+            echo "Waiting 15 minutes then re-triggering..."
+            sleep 900
             curl -X POST \
               -H "Accept: application/vnd.github.v3+json" \
               -H "Authorization: token $GH_TOKEN" \
