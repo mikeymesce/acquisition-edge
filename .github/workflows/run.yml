@@ -27,10 +27,8 @@ jobs:
           python -m playwright install chromium
           python -m playwright install-deps chromium
 
-      - name: Run full scrape + deep check
-        run: |
-          python main.py --nj-only
-          python deep_check.py
+      - name: Run license scrape
+        run: python main.py --nj-only
 
       - name: Commit updated data
         run: |
