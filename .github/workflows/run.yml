@@ -1,8 +1,6 @@
 name: Run Acquisition Edge
 
 on:
-  schedule:
-    - cron: '0 10 * * *'  # 6am ET daily
   workflow_dispatch:
 
 permissions:
@@ -43,3 +41,24 @@ jobs:
           git add -A data/ results/
           git diff --staged --quiet || git commit -m "Update contractor data from cloud run [skip ci]"
           git push
+
+      - name: Re-run if enrichment not complete
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          REMAINING=$(python3 -c "
+          import sqlite3
+          conn = sqlite3.connect('data/contractors.db')
+          count = conn.execute(\"SELECT COUNT(*) FROM contractors WHERE status IN ('Deceased','Retired') AND license_type IN ('Master Plumber','Electrical Contractor') AND (deep_checked IS NULL OR deep_checked = 0) AND (obituary_found IS NULL OR obituary_found = 0)\").fetchone()[0]
+          print(count)
+          conn.close()
+          ")
+          echo "Remaining to enrich: $REMAINING"
+          if [ "$REMAINING" -gt 0 ]; then
+            echo "Waiting 10 minutes then re-triggering..."
+            sleep 600
+            gh workflow run "Run Acquisition Edge" --repo mikeymesce/acquisition-edge
+            echo "Re-triggered!"
+          else
+            echo "All done! No re-trigger needed."
+          fi
