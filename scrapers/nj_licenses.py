@@ -98,6 +98,18 @@ def _polite_delay(min_sec=2, max_sec=4):
     time.sleep(random.uniform(min_sec, max_sec))
 
 
+def _get_page_content_with_retry(page, max_retries=3):
+    """Get page content with retry logic."""
+    for attempt in range(max_retries):
+        try:
+            return page.content()
+        except Exception as e:
+            print(f"    [RETRY {attempt + 1}/{max_retries}] page.content() failed: {e}")
+            if attempt < max_retries - 1:
+                time.sleep(5)
+    return ""
+
+
 def scrape_nj_licenses():
     """Scrape NJ MyLicense for plumbing and electrical licenses."""
     print("=" * 50)
@@ -152,10 +164,32 @@ def _search_and_parse(page, search):
             page.keyboard.press("Enter")
         page.wait_for_timeout(5000)
 
+        # Try to figure out expected page count from pager row
+        try:
+            html = _get_page_content_with_retry(page)
+            soup = BeautifulSoup(html, "html.parser")
+            table = soup.find("table", id="datagrid_results")
+            if table:
+                # Find the last page link in the pager row
+                pager_links = table.find_all("a", href=True)
+                page_numbers = []
+                for link in pager_links:
+                    txt = link.get_text(strip=True)
+                    if txt.isdigit():
+                        page_numbers.append(int(txt))
+                if page_numbers:
+                    print(f"  Expected pages: at least {max(page_numbers)}+")
+        except Exception:
+            pass
+
         # Parse first page
         page_results = _parse_datagrid(page, search)
         contractors.extend(page_results)
         print(f"  Page 1: {len(page_results)} results")
+
+        # Incremental save after first page
+        if page_results:
+            save_to_db(page_results)
 
         # Follow pagination — NJ uses numbered page links via __doPostBack
         page_num = 1
@@ -176,15 +210,41 @@ def _search_and_parse(page, search):
                 break
 
             _polite_delay(1, 2)
-            next_link.click()
-            # Wait for page to fully load — this was causing the pagination bug
-            page.wait_for_timeout(5000)
+
+            # Click with retry logic
+            click_success = False
+            for attempt in range(3):
+                try:
+                    next_link.click()
+                    # Wait for the datagrid to re-attach after postback
+                    page.wait_for_selector('#datagrid_results', state='attached', timeout=15000)
+                    page.wait_for_timeout(3000)
+                    click_success = True
+                    break
+                except Exception as e:
+                    print(f"    [RETRY {attempt + 1}/3] Pagination click failed: {e}")
+                    if attempt < 2:
+                        time.sleep(5)
+                        # Re-find the link after waiting
+                        next_link = page.query_selector(
+                            f'#datagrid_results a:has-text("{next_page}")'
+                        )
+                        if not next_link:
+                            break
+
+            if not click_success:
+                print(f"  [ERROR] Could not navigate to page {next_page}. Stopping pagination.")
+                break
 
             page_results = _parse_datagrid(page, search)
             if not page_results:
                 break
 
             contractors.extend(page_results)
+
+            # Incremental save after EACH page
+            save_to_db(page_results)
+
             if page_num % 10 == 0:
                 print(f"  Page {page_num}: {len(contractors)} total so far")
 
@@ -196,7 +256,10 @@ def _search_and_parse(page, search):
 
 def _parse_datagrid(page, search):
     """Parse the datagrid_results table on the current page."""
-    html = page.content()
+    html = _get_page_content_with_retry(page)
+    if not html:
+        return []
+
     soup = BeautifulSoup(html, "html.parser")
 
     table = soup.find("table", id="datagrid_results")

@@ -58,19 +58,23 @@ def main():
     top = get_top_leads(limit=10)
     if top:
         print(f"\n{'=' * 50}")
-        print(f"Top {len(top)} Distressed Contractors:")
+        print(f"Top {len(top)} Leads (by Combined Score):")
         print(f"{'=' * 50}")
         for i, lead in enumerate(top, 1):
             name = lead["name"] or lead["business_name"] or "Unknown"
             city = lead["city"] or "Unknown"
             status = lead["status"] or "Unknown"
-            score = lead["distress_score"]
+            combined = lead.get("combined_score", 0)
+            quality = lead.get("quality_score", 0)
+            motivation = lead.get("motivation_score", 0)
             notes = lead["notes"] or ""
             print(f"\n  {i}. {name}")
             print(f"     {lead['license_type']} | {city}, NJ | Status: {status}")
-            print(f"     Score: {score} | Signals: {notes}")
+            print(f"     Combined: {combined} (Quality: {quality}, Motivation: {motivation})")
+            if notes:
+                print(f"     Signals: {notes}")
     else:
-        print("\nNo distressed contractors found in this run.")
+        print("\nNo leads found in this run.")
 
     print(f"\n{'=' * 50}")
     print("Done!")

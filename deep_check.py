@@ -4,7 +4,7 @@ Deep Check — Google search each contractor for distress signals.
 
 Searches Google for each Master Plumber and Electrical Contractor,
 extracts ratings, review counts, website presence, and distress keywords
-from search result snippets.
+from search result snippets. Then re-scores with the two-score model.
 
 Usage:
     python3 deep_check.py
@@ -38,12 +38,15 @@ def load_config():
 
 
 def add_columns_if_missing(conn):
-    """Add google_rating, review_count, has_website columns if they don't exist."""
+    """Add google_rating, review_count, has_website, score columns if they don't exist."""
     new_cols = [
         ("google_rating", "REAL"),
         ("review_count", "INTEGER"),
         ("has_website", "INTEGER DEFAULT 0"),
         ("distress_signals", "TEXT"),
+        ("quality_score", "INTEGER DEFAULT 0"),
+        ("motivation_score", "INTEGER DEFAULT 0"),
+        ("combined_score", "REAL DEFAULT 0"),
     ]
     for col_name, col_type in new_cols:
         try:
@@ -114,15 +117,9 @@ def parse_google_results(html):
     text_lower = html.lower()
 
     # --- Google Maps rating ---
-    # Google local pack shows ratings like "4.5" near star icons, often in spans
-    # Pattern: "X.X" followed by stars or "(NNN)" review count
-    # Look for the rating pattern in the local pack area
     rating_patterns = [
-        # "4.5(123)" or "4.5 (123)"
         r'(\d\.\d)\s*\((\d[\d,]*)\)',
-        # aria-label="Rated 4.5 out of 5" or "4.5 out of 5 stars"
         r'[Rr]ated\s+(\d\.\d)\s+out\s+of\s+5',
-        # "4.5 stars" nearby "(123 reviews)"
         r'(\d\.\d)\s*stars?',
     ]
 
@@ -138,7 +135,6 @@ def parse_google_results(html):
                 pass
             break
 
-    # If we got a rating but no review count, try to find review count separately
     if result["google_rating"] and not result["review_count"]:
         review_match = re.search(r'\((\d[\d,]*)\s*(?:reviews?|Google reviews?)\)', html, re.IGNORECASE)
         if review_match:
@@ -148,18 +144,14 @@ def parse_google_results(html):
                 pass
 
     # --- Website presence ---
-    # If there's a non-Google, non-Yelp, non-directory link in top results, they probably have a site
-    # Simple heuristic: look for "Website" link in local pack or a homepage-looking result
     if re.search(r'class="[^"]*"[^>]*>Website<', html, re.IGNORECASE):
         result["has_website"] = 1
 
-    # Also check if any organic result looks like their own domain (not directories)
     directory_domains = [
         "yelp.com", "yellowpages.com", "bbb.org", "angi.com",
         "homeadvisor.com", "facebook.com", "linkedin.com", "mapquest.com",
         "manta.com", "google.com", "nextdoor.com", "thumbtack.com",
     ]
-    # Find URLs in search results
     url_matches = re.findall(r'href="(https?://[^"]+)"', html)
     for u in url_matches:
         u_lower = u.lower()
@@ -171,97 +163,131 @@ def parse_google_results(html):
     # --- Distress signals from snippets ---
     for keyword in DISTRESS_KEYWORDS:
         if keyword in text_lower:
-            # Verify it's in actual content, not just in Google UI boilerplate
-            # Find surrounding context
             idx = text_lower.find(keyword)
-            # Grab a window around the keyword
             start = max(0, idx - 100)
             end = min(len(text_lower), idx + len(keyword) + 100)
             context = text_lower[start:end]
-            # Skip if it's clearly in a Google UI element (search suggestions, etc.)
             if "did you mean" not in context and "related searches" not in context:
                 result["distress_signals"].append(keyword)
 
     return result
 
 
-def rescore_contractor(row, google_data, weights):
-    """Re-score a contractor using existing license signals + new Google signals."""
-    score = 0
-    notes = []
+def rescore_contractor(row, google_data):
+    """Re-score a contractor using the two-score model after Google enrichment."""
 
-    # --- Existing license-based scoring (from scoring.py logic) ---
     status = (row.get("status") or "").lower()
-    if "expired" in status or "lapsed" in status:
-        score += weights.get("license_expired", 25)
-        notes.append("License expired")
-    if "revoked" in status or "suspended" in status:
-        score += weights.get("disciplinary_action", 20)
-        notes.append(f"License {status}")
-
-    exp_date_str = row.get("expiration_date") or ""
-    if exp_date_str:
-        try:
-            today = datetime.now()
-            for fmt in ["%m/%d/%Y", "%Y-%m-%d", "%m-%d-%Y"]:
-                try:
-                    exp_date = datetime.strptime(exp_date_str.strip(), fmt)
-                    break
-                except ValueError:
-                    continue
-            else:
-                exp_date = None
-            if exp_date:
-                days_until = (exp_date - today).days
-                if 0 < days_until <= 90:
-                    score += weights.get("license_expiring_90_days", 15)
-                    notes.append(f"Expires in {days_until}d")
-                elif days_until < 0 and "expired" not in status:
-                    score += weights.get("license_expired", 25)
-                    notes.append(f"Expired {abs(days_until)}d ago")
-        except Exception:
-            pass
-
-    # --- Google-based signals ---
+    signals = google_data.get("distress_signals", [])
+    signal_str = ",".join(signals)
+    has_website = google_data.get("has_website", 0)
     rating = google_data.get("google_rating")
     reviews = google_data.get("review_count")
-    has_website = google_data.get("has_website", 0)
-    signals = google_data.get("distress_signals", [])
 
-    # No website = small signal
-    if not has_website:
-        score += weights.get("no_website", 5)
-        notes.append("No website found")
+    # --- Business Quality Score (0-100) ---
+    quality = 0
+    q_notes = []
 
-    # Low rating
-    if rating is not None and rating < 3.0:
-        score += 10
-        notes.append(f"Low rating: {rating}")
+    if "active" in status:
+        quality += 15
+        q_notes.append("Active license")
 
-    # Very few or no reviews (might mean tiny/fading business)
-    if reviews is not None and reviews <= 3:
-        score += 5
-        notes.append(f"Only {reviews} reviews")
+    if has_website:
+        quality += 15
+        q_notes.append("Has website")
 
-    # Distress keywords
-    for signal in signals:
-        if signal in ("obituary", "passed away"):
-            score += weights.get("probate_filing", 25)
-            notes.append(f"Google: {signal}")
-        elif signal == "divorce":
-            score += weights.get("divorce_filing", 20)
-            notes.append(f"Google: {signal}")
-        elif signal in ("closed", "out of business", "permanently closed"):
-            score += 20
-            notes.append(f"Google: {signal}")
-        elif signal in ("for sale", "retired", "shutting down"):
-            score += 15
-            notes.append(f"Google: {signal}")
-        elif signal in ("lawsuit", "violation"):
-            score += 10
-            notes.append(f"Google: {signal}")
+    if rating is not None:
+        if rating >= 4.0:
+            quality += 20
+            q_notes.append(f"Rating {rating}")
+        elif rating >= 3.5:
+            quality += 10
+            q_notes.append(f"Rating {rating}")
 
-    return score, "; ".join(notes), ",".join(signals)
+    if reviews is not None:
+        if reviews >= 100:
+            quality += 20
+            q_notes.append(f"{reviews} reviews")
+        elif reviews >= 50:
+            quality += 15
+            q_notes.append(f"{reviews} reviews")
+        elif reviews >= 10:
+            quality += 10
+            q_notes.append(f"{reviews} reviews")
+        else:
+            quality += 5
+            q_notes.append(f"{reviews} reviews")
+
+    quality = min(quality, 100)
+
+    # --- Seller Motivation Score (0-100) ---
+    motivation = 0
+    m_notes = []
+
+    all_text = f"{signal_str} {(row.get('notes') or '')}".lower()
+
+    death_keywords = ["obituary", "passed away", "died", "estate", "probate"]
+    if any(kw in all_text for kw in death_keywords):
+        motivation += 30
+        m_notes.append("Death/estate signal")
+
+    if "divorce" in all_text:
+        motivation += 25
+        m_notes.append("Divorce signal")
+
+    if "expired" in status or "lapsed" in status:
+        motivation += 20
+        m_notes.append("License expired")
+
+    if "retired" in all_text or "retiring" in all_text:
+        motivation += 20
+        m_notes.append("Retiring")
+
+    closed_keywords = ["out of business", "permanently closed", "for sale", "shutting down", "closed"]
+    if any(kw in all_text for kw in closed_keywords):
+        motivation += 20
+        m_notes.append("Closed/for sale")
+
+    if "revoked" in status or "suspended" in status:
+        motivation += 15
+        m_notes.append(f"License {status}")
+
+    if not has_website and "active" in status:
+        motivation += 5
+        m_notes.append("No website but active")
+
+    motivation = min(motivation, 100)
+
+    # Combined
+    combined = (quality * 0.6) + (motivation * 0.4)
+
+    all_notes = q_notes + m_notes
+    notes_str = "; ".join(all_notes) if all_notes else ""
+
+    return quality, motivation, round(combined, 1), notes_str, signal_str
+
+
+def _save_results(results):
+    """Save top results to a text file."""
+    os.makedirs("results", exist_ok=True)
+    today = datetime.now().strftime("%Y-%m-%d")
+    filepath = f"results/deep_check_{today}.txt"
+
+    results.sort(key=lambda x: x["combined"], reverse=True)
+
+    with open(filepath, "w") as f:
+        f.write(f"Deep Check Results — {today}\n")
+        f.write("=" * 60 + "\n\n")
+
+        for i, r in enumerate(results[:50], 1):
+            f.write(f"{i}. {r['name']} — {r['city']}, NJ\n")
+            f.write(f"   {r['license_type']}\n")
+            f.write(f"   Quality: {r['quality']} | Motivation: {r['motivation']} | Combined: {r['combined']}\n")
+            f.write(f"   Rating: {r['rating'] or 'N/A'} | Reviews: {r['reviews'] or 'N/A'} | Website: {'Yes' if r['has_website'] else 'No'}\n")
+            if r["notes"]:
+                f.write(f"   Signals: {r['notes']}\n")
+            f.write("\n")
+
+    print(f"\nResults saved to {filepath}")
 
 
 def main():
@@ -276,9 +302,6 @@ def main():
 
     contractors = get_contractors(conn)
     print(f"\nLoaded {len(contractors)} contractors (Master Plumber + Electrical Contractor)")
-
-    config = load_config()
-    weights = config.get("distress_weights", {})
 
     results = []
 
@@ -316,16 +339,20 @@ def main():
             if sigs:
                 print(f"  DISTRESS SIGNALS: {', '.join(sigs)}")
 
-            # Rescore
-            score, notes, signal_str = rescore_contractor(c, google_data, weights)
+            # Two-score model
+            quality, motivation, combined, notes, signal_str = rescore_contractor(c, google_data)
+            print(f"  Quality: {quality} | Motivation: {motivation} | Combined: {combined}")
 
-            # Update database
+            # Update database with all new columns
             conn.execute("""
                 UPDATE contractors SET
                     google_rating = ?,
                     review_count = ?,
                     has_website = ?,
                     distress_signals = ?,
+                    quality_score = ?,
+                    motivation_score = ?,
+                    combined_score = ?,
                     distress_score = ?,
                     notes = ?,
                     last_updated = ?
@@ -335,7 +362,10 @@ def main():
                 google_data["review_count"],
                 google_data["has_website"],
                 signal_str or None,
-                score,
+                quality,
+                motivation,
+                combined,
+                motivation,  # backwards compat
                 notes or None,
                 datetime.now().strftime("%Y-%m-%d"),
                 c["id"],
@@ -346,7 +376,9 @@ def main():
                 "name": name,
                 "city": city,
                 "license_type": license_type,
-                "score": score,
+                "quality": quality,
+                "motivation": motivation,
+                "combined": combined,
                 "notes": notes,
                 "rating": google_data["google_rating"],
                 "reviews": google_data["review_count"],
@@ -367,17 +399,18 @@ def main():
     print(f"{'=' * 55}")
     print(f"Checked: {len(results)} contractors")
 
-    # Sort by score descending
-    results.sort(key=lambda x: x["score"], reverse=True)
+    # Sort by combined score descending
+    results.sort(key=lambda x: x["combined"], reverse=True)
 
-    # Top 10 most distressed
+    # Top 10
     top = results[:10]
     if top:
-        print(f"\nTop {len(top)} Most Distressed:")
+        print(f"\nTop {len(top)} Leads (by Combined Score):")
         print("-" * 55)
         for i, r in enumerate(top, 1):
             print(f"\n  {i}. {r['name']} — {r['city']}, NJ")
-            print(f"     {r['license_type']} | Score: {r['score']}")
+            print(f"     {r['license_type']} | Combined: {r['combined']}")
+            print(f"     Quality: {r['quality']} | Motivation: {r['motivation']}")
             print(f"     Rating: {r['rating'] or 'N/A'} | Reviews: {r['reviews'] or 'N/A'} | Website: {'Yes' if r['has_website'] else 'No'}")
             if r["notes"]:
                 print(f"     Signals: {r['notes']}")
@@ -385,14 +418,18 @@ def main():
         print("\nNo results to show.")
 
     # Quick stats
-    with_signals = sum(1 for r in results if r["score"] > 0)
+    with_motivation = sum(1 for r in results if r["motivation"] > 0)
     with_rating = sum(1 for r in results if r["rating"] is not None)
     no_website = sum(1 for r in results if not r["has_website"])
     print(f"\nStats:")
-    print(f"  Contractors with distress signals: {with_signals}")
-    print(f"  Contractors with Google rating:    {with_rating}")
-    print(f"  Contractors with no website:       {no_website}")
+    print(f"  Contractors with motivation signals: {with_motivation}")
+    print(f"  Contractors with Google rating:      {with_rating}")
+    print(f"  Contractors with no website:         {no_website}")
     print(f"{'=' * 55}")
+
+    # Save results file
+    if results:
+        _save_results(results)
 
     conn.close()
 
