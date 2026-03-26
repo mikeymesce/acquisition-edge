@@ -49,7 +49,10 @@ jobs:
           REMAINING=$(python3 -c "
           import sqlite3
           conn = sqlite3.connect('data/contractors.db')
-          count = conn.execute(\"SELECT COUNT(*) FROM contractors WHERE status IN ('Deceased','Retired') AND license_type IN ('Master Plumber','Electrical Contractor') AND (deep_checked IS NULL OR deep_checked = 0) AND (obituary_found IS NULL OR obituary_found = 0)\").fetchone()[0]
+          try:
+              count = conn.execute(\"SELECT COUNT(*) FROM contractors WHERE status IN ('Deceased','Retired') AND license_type IN ('Master Plumber','Electrical Contractor') AND (obituary_found IS NULL OR obituary_found = 0)\").fetchone()[0]
+          except:
+              count = 0
           print(count)
           conn.close()
           ")
